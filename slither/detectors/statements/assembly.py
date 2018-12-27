@@ -16,6 +16,8 @@ class Assembly(AbstractDetector):
     IMPACT = DetectorClassification.INFORMATIONAL
     CONFIDENCE = DetectorClassification.HIGH
 
+    WIKI = 'https://github.com/trailofbits/slither/wiki/Vulnerabilities-Description#assembly-usage'
+
     @staticmethod
     def _contains_inline_assembly_use(node):
         """
@@ -28,6 +30,8 @@ class Assembly(AbstractDetector):
     def detect_assembly(self, contract):
         ret = []
         for f in contract.functions:
+            if f.contract != contract:
+                continue
             nodes = f.nodes
             assembly_nodes = [n for n in nodes if
                               self._contains_inline_assembly_use(n)]
@@ -39,21 +43,23 @@ class Assembly(AbstractDetector):
         """ Detect the functions that use inline assembly
         """
         results = []
+        all_info = ''
         for c in self.contracts:
             values = self.detect_assembly(c)
             for func, nodes in values:
-                func_name = func.name
-                info = "Assembly in %s, Contract: %s, Function: %s" % (self.filename,
-                                                                       c.name,
-                                                                       func_name)
-                self.log(info)
+                info = "{}.{} uses assembly ({})\n"
+                info = info.format(func.contract.name, func.name, func.source_mapping_str)
 
-                sourceMapping = [n.source_mapping for n in nodes]
+                for node in nodes:
+                    info += "\t- {}\n".format(node.source_mapping_str)
 
-                results.append({'vuln': 'Assembly',
-                                'sourceMapping': sourceMapping,
-                                'filename': self.filename,
-                                'contract': c.name,
-                                'function_name': func_name})
+                all_info += info
 
+                json = self.generate_json_result(info)
+                self.add_function_to_json(func, json)
+                self.add_nodes_to_json(nodes, json)
+                results.append(json)
+
+        if all_info != '':
+            self.log(all_info)
         return results

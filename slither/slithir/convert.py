@@ -2,7 +2,7 @@ import logging
 
 from slither.core.declarations import (Contract, Enum, Event, SolidityFunction,
                                        Structure, SolidityVariableComposed, Function, SolidityVariable)
-from slither.core.expressions import Identifier, Literal
+from slither.core.expressions import Identifier, Literal, TupleExpression
 from slither.core.solidity_types import ElementaryType, UserDefinedType, MappingType, ArrayType, FunctionType
 from slither.core.variables.variable import Variable
 from slither.slithir.operations import (Assignment, Binary, BinaryType, Call,
@@ -124,6 +124,7 @@ def propage_type_and_convert_call(result, node):
         if isinstance(ins, TmpCall):
             new_ins = extract_tmp_call(ins)
             if new_ins:
+                new_ins.set_node(ins.node)
                 ins = new_ins
                 result[idx] = ins
 
@@ -156,10 +157,13 @@ def propage_type_and_convert_call(result, node):
         if new_ins:
             if isinstance(new_ins, (list,)):
                 assert len(new_ins) == 2
+                new_ins[0].set_node(ins.node)
+                new_ins[1].set_node(ins.node)
                 result.insert(idx, new_ins[0])
                 result.insert(idx+1, new_ins[1])
                 idx = idx + 1 
             else:
+                new_ins.set_node(ins.node)
                 result[idx] = new_ins
         idx = idx +1
     return result
@@ -208,7 +212,7 @@ def convert_to_low_level(ir):
     logger.error('Incorrect conversion to low level {}'.format(ir))
     exit(-1)
 
-def convert_to_push(ir):
+def convert_to_push(ir, node):
     """
     Convert a call to a PUSH operaiton
 
@@ -221,7 +225,7 @@ def convert_to_push(ir):
     if isinstance(ir.arguments[0], list):
         ret = []
 
-        val = TemporaryVariable()
+        val = TemporaryVariable(node)
         operation = InitArray(ir.arguments[0], val)
         ret.append(operation)
 
@@ -250,6 +254,7 @@ def look_for_library(contract, ir, node, using_for, t):
             lib_call.arguments = [ir.destination] + ir.arguments
             new_ir = convert_type_library_call(lib_call, lib_contract)
             if new_ir:
+                new_ir.set_node(ir.node)
                 return new_ir
     return None
 
@@ -357,7 +362,22 @@ def convert_type_of_high_level_call(ir, contract):
             return_type = return_type[0]
     else:
         # otherwise its a variable (getter)
-        return_type = func.type
+        # If its a mapping or a array
+        # we iterate until we find the final type
+        # mapping and array can be mixed together
+        # ex:
+        #    mapping ( uint => mapping ( uint => uint)) my_var
+        #    mapping(uint => uint)[] test;p
+        if isinstance(func.type, (MappingType, ArrayType)):
+            tmp = func.type
+            while isinstance(tmp, (MappingType, ArrayType)):
+                if isinstance(tmp, MappingType):
+                    tmp = tmp.type_to
+                else:
+                    tmp = tmp.type
+            return_type = tmp
+        else:
+            return_type = func.type
     if return_type:
         ir.lvalue.set_type(return_type)
     else:
@@ -369,6 +389,7 @@ def propagate_types(ir, node):
     # propagate the type
     using_for = node.function.contract.using_for
     if isinstance(ir, OperationWithLValue):
+        # Force assignment in case of missing previous correct type
         if not ir.lvalue.type:
             if isinstance(ir, Assignment):
                 ir.lvalue.set_type(ir.rvalue.type)
@@ -413,7 +434,7 @@ def propagate_types(ir, node):
                 # Which leads to return a list of operation
                 if isinstance(t, ArrayType):
                     if ir.function_name == 'push' and len(ir.arguments) == 1:
-                        return convert_to_push(ir)
+                        return convert_to_push(ir, node)
 
             elif isinstance(ir, Index):
                 if isinstance(ir.variable_left.type, MappingType):
@@ -451,8 +472,10 @@ def propagate_types(ir, node):
                 assert False
             elif isinstance(ir, Member):
                 # TODO we should convert the reference to a temporary if the member is a length or a balance
-                if ir.variable_right == 'length' and isinstance(ir.variable_left.type, ElementaryType):
-                    return Length(ir.variable_left, ir.lvalue)
+                if ir.variable_right == 'length' and isinstance(ir.variable_left.type, (ElementaryType, ArrayType)):
+                    length = Length(ir.variable_left, ir.lvalue)
+                    ir.lvalue.points_to = ir.variable_left
+                    return ir
                 if ir.variable_right == 'balance' and isinstance(ir.variable_left.type, ElementaryType):
                     return Balance(ir.variable_left, ir.lvalue)
                 left = ir.variable_left
@@ -592,6 +615,11 @@ def extract_tmp_call(ins):
     assert isinstance(ins, TmpCall)
     if isinstance(ins.ori, Member):
         if isinstance(ins.ori.variable_left, Contract):
+            st = ins.ori.variable_left.get_structure_from_name(ins.ori.variable_right)
+            if st:
+                op = NewStructure(st, ins.lvalue)
+                op.call_id = ins.call_id
+                return op
             libcall = LibraryCall(ins.ori.variable_left, ins.ori.variable_right, ins.nbr_arguments, ins.lvalue, ins.type_call)
             libcall.call_id = ins.call_id
             return libcall
@@ -639,19 +667,16 @@ def convert_expression(expression, node):
     # handle standlone expression
     # such as return true;
     from slither.core.cfg.node import NodeType
-    if isinstance(expression, Literal) and node.type == NodeType.RETURN:
-        result =  [Return(Constant(expression.value))]
-        return result
-    if isinstance(expression, Identifier) and node.type == NodeType.RETURN:
-        result =  [Return(expression.value)]
-        return result
+
     if isinstance(expression, Literal) and node.type in [NodeType.IF, NodeType.IFLOOP]:
         result =  [Condition(Constant(expression.value))]
         return result
     if isinstance(expression, Identifier) and node.type in [NodeType.IF, NodeType.IFLOOP]:
         result =  [Condition(expression.value)]
         return result
-    visitor = ExpressionToSlithIR(expression)
+
+
+    visitor = ExpressionToSlithIR(expression, node)
     result = visitor.result()
 
     result = apply_ir_heuristics(result, node)

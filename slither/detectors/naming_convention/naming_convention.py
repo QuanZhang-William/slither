@@ -17,6 +17,8 @@ class NamingConvention(AbstractDetector):
     IMPACT = DetectorClassification.INFORMATIONAL
     CONFIDENCE = DetectorClassification.HIGH
 
+    WIKI = 'https://github.com/trailofbits/slither/wiki/Vulnerabilities-Description#conformance-to-solidity-naming-conventions'
+
     @staticmethod
     def is_cap_words(name):
         return re.search('^[A-Z]([A-Za-z0-9]+)?_?$', name) is not None
@@ -42,58 +44,75 @@ class NamingConvention(AbstractDetector):
     def detect(self):
 
         results = []
+        all_info = ''
         for contract in self.contracts:
 
             if not self.is_cap_words(contract.name):
-                info = "Contract '{}' is not in CapWords".format(contract.name)
-                self.log(info)
+                info = "Contract '{}' ({}) is not in CapWords\n".format(contract.name,
+                                                                        contract.source_mapping_str)
+                all_info += info
 
-                results.append({'vuln': 'NamingConvention',
-                                'filename': self.filename,
-                                'contract': contract.name,
-                                'sourceMapping': contract.source_mapping})
+                json = self.generate_json_result(info)
+                elem = dict()
+                elem['target'] = 'contract'
+                elem['convention'] = 'CapWords'
+                elem['name'] = contract.name
+                elem['source_mapping'] = contract.source_mapping
+                json['elements'] = [elem]
+                results.append(json)
 
             for struct in contract.structures:
                 if struct.contract != contract:
                     continue
 
                 if not self.is_cap_words(struct.name):
-                    info = "Struct '{}' is not in CapWords, Contract: '{}' ".format(struct.name, contract.name)
-                    self.log(info)
+                    info = "Struct '{}.{}' ({}) is not in CapWords\n"
+                    info = info.format(struct.contract.name, struct.name, struct.source_mapping_str)
+                    all_info += info
 
-                    results.append({'vuln': 'NamingConvention',
-                                    'filename': self.filename,
-                                    'contract': contract.name,
-                                    'struct': struct.name,
-                                    'sourceMapping': struct.source_mapping})
-
+                    json = self.generate_json_result(info)
+                    elem = dict()
+                    elem['target'] = 'structure'
+                    elem['convention'] = 'CapWords'
+                    elem['name'] = struct.name
+                    elem['source_mapping'] = struct.source_mapping
+                    json['elements'] = [elem]
+                    results.append(json)
             for event in contract.events:
                 if event.contract != contract:
                     continue
 
                 if not self.is_cap_words(event.name):
-                    info = "Event '{}' is not in CapWords, Contract: '{}' ".format(event.name, contract.name)
-                    self.log(info)
+                    info = "Event '{}.{}' ({}) is not in CapWords\n"
+                    info = info.format(event.contract.name, event.name, event.source_mapping_str)
+                    all_info += info
 
-                    results.append({'vuln': 'NamingConvention',
-                                    'filename': self.filename,
-                                    'contract': contract.name,
-                                    'event': event.name,
-                                    'sourceMapping': event.source_mapping})
+                    json = self.generate_json_result(info)
+                    elem = dict()
+                    elem['target'] = 'event'
+                    elem['convention'] = 'CapWords'
+                    elem['name'] = event.name
+                    elem['source_mapping'] = event.source_mapping
+                    json['elements'] = [elem]
+                    results.append(json)
 
             for func in contract.functions:
                 if func.contract != contract:
                     continue
 
                 if not self.is_mixed_case(func.name):
-                    info = "Function '{}' is not in mixedCase, Contract: '{}' ".format(func.name, contract.name)
-                    self.log(info)
+                    info = "Function '{}.{}' ({}) is not in mixedCase\n"
+                    info = info.format(func.contract.name, func.name, func.source_mapping_str)
+                    all_info += info
 
-                    results.append({'vuln': 'NamingConvention',
-                                    'filename': self.filename,
-                                    'contract': contract.name,
-                                    'function': func.name,
-                                    'sourceMapping': func.source_mapping})
+                    json = self.generate_json_result(info)
+                    elem = dict()
+                    elem['target'] = 'function'
+                    elem['convention'] = 'mixedCase'
+                    elem['name'] = func.name
+                    elem['source_mapping'] = func.source_mapping
+                    json['elements'] = [elem]
+                    results.append(json)
 
                 for argument in func.parameters:
                     if argument in func.variables_read_or_written:
@@ -101,16 +120,21 @@ class NamingConvention(AbstractDetector):
                     else:
                         correct_naming = self.is_mixed_case_with_underscore(argument.name)
                     if not correct_naming:
-                        info = "Parameter '{}' is not in mixedCase, Contract: '{}', Function: '{}'' " \
-                            .format(argument.name, argument.name, contract.name)
-                        self.log(info)
+                        info = "Parameter '{}' of {}.{} ({}) is not in mixedCase\n"
+                        info = info.format(argument.name,
+                                           argument.function.contract.name,
+                                           argument.function,
+                                           argument.source_mapping_str)
+                        all_info += info
 
-                        results.append({'vuln': 'NamingConvention',
-                                        'filename': self.filename,
-                                        'contract': contract.name,
-                                        'function': func.name,
-                                        'argument': argument.name,
-                                        'sourceMapping': argument.source_mapping})
+                        json = self.generate_json_result(info)
+                        elem = dict()
+                        elem['target'] = 'parameter'
+                        elem['convention'] = 'mixedCase'
+                        elem['name'] = argument.name
+                        elem['source_mapping'] = argument.source_mapping
+                        json['elements'] = [elem]
+                        results.append(json)
 
             for var in contract.state_variables:
                 if var.contract != contract:
@@ -118,15 +142,18 @@ class NamingConvention(AbstractDetector):
 
                 if self.should_avoid_name(var.name):
                     if not self.is_upper_case_with_underscores(var.name):
-                        info = "Variable '{}' l, O, I should not be used, Contract: '{}' " \
-                            .format(var.name, contract.name)
-                        self.log(info)
+                        info = "Variable '{}.{}' ({}) used l, O, I, which should not be used\n"
+                        info = info.format(var.contract.name, var.name, var.source_mapping_str)
+                        all_info += info
 
-                        results.append({'vuln': 'NamingConvention',
-                                        'filename': self.filename,
-                                        'contract': contract.name,
-                                        'constant': var.name,
-                                        'sourceMapping': var.source_mapping})
+                        json = self.generate_json_result(info)
+                        elem = dict()
+                        elem['target'] = 'variable'
+                        elem['convention'] = 'l_O_I_should_not_be_used'
+                        elem['name'] = var.name
+                        elem['source_mapping'] = var.source_mapping
+                        json['elements'] = [elem]
+                        results.append(json)
 
                 if var.is_constant is True:
                     # For ERC20 compatibility
@@ -134,56 +161,78 @@ class NamingConvention(AbstractDetector):
                         continue
 
                     if not self.is_upper_case_with_underscores(var.name):
-                        info = "Constant '{}' is not in UPPER_CASE_WITH_UNDERSCORES, Contract: '{}' " \
-                            .format(var.name, contract.name)
-                        self.log(info)
+                        info = "Constant '{}.{}' ({}) is not in UPPER_CASE_WITH_UNDERSCORES\n"
+                        info = info.format(var.contract.name, var.name, var.source_mapping_str)
+                        all_info += info
 
-                        results.append({'vuln': 'NamingConvention',
-                                        'filename': self.filename,
-                                        'contract': contract.name,
-                                        'constant': var.name,
-                                        'sourceMapping': var.source_mapping})
+                        json = self.generate_json_result(info)
+                        elem = dict()
+                        elem['target'] = 'variable_constant'
+                        elem['convention'] = 'UPPER_CASE_WITH_UNDERSCORES'
+                        elem['name'] = var.name
+                        elem['source_mapping'] = var.source_mapping
+                        json['elements'] = [elem]
+                        results.append(json)
+
                 else:
                     if var.visibility == 'private':
                         correct_naming = self.is_mixed_case_with_underscore(var.name)
                     else:
                         correct_naming = self.is_mixed_case(var.name)
                     if not correct_naming:
-                        info = "Variable '{}' is not in mixedCase, Contract: '{}' ".format(var.name, contract.name)
-                        self.log(info)
+                        info = "Variable '{}.{}' ({}) is not in mixedCase\n"
+                        info = info.format(var.contract.name, var.name, var.source_mapping_str)
+                        all_info += info
 
-                        results.append({'vuln': 'NamingConvention',
-                                        'filename': self.filename,
-                                        'contract': contract.name,
-                                        'variable': var.name,
-                                        'sourceMapping': var.source_mapping})
+                        json = self.generate_json_result(info)
+                        elem = dict()
+                        elem['target'] = 'variable'
+                        elem['convention'] = 'mixedCase'
+                        elem['name'] = var.name
+                        elem['source_mapping'] = var.source_mapping
+                        json['elements'] = [elem]
+                        results.append(json)
 
             for enum in contract.enums:
                 if enum.contract != contract:
                     continue
 
                 if not self.is_cap_words(enum.name):
-                    info = "Enum '{}' is not in CapWords, Contract: '{}' ".format(enum.name, contract.name)
-                    self.log(info)
+                    info = "Enum '{}.{}' ({}) is not in CapWords\n"
+                    info = info.format(enum.contract.name, enum.name, enum.source_mapping_str)
+                    all_info += info
 
-                    results.append({'vuln': 'NamingConvention',
-                                    'filename': self.filename,
-                                    'contract': contract.name,
-                                    'enum': enum.name,
-                                    'sourceMapping': enum.source_mapping})
+                    json = self.generate_json_result(info)
+                    elem = dict()
+                    elem['target'] = 'enum'
+                    elem['convention'] = 'CapWords'
+                    elem['name'] = enum.name
+                    elem['source_mapping'] = enum.source_mapping
+                    json['elements'] = [elem]
+                    results.append(json)
+
 
             for modifier in contract.modifiers:
                 if modifier.contract != contract:
                     continue
 
                 if not self.is_mixed_case(modifier.name):
-                    info = "Modifier '{}' is not in mixedCase, Contract: '{}' ".format(modifier.name, contract.name)
-                    self.log(info)
+                    info = "Modifier '{}.{}' ({}) is not in mixedCase\n"
+                    info = info.format(modifier.contract.name,
+                                       modifier.name,
+                                       modifier.source_mapping_str)
+                    all_info += info
 
-                    results.append({'vuln': 'NamingConvention',
-                                    'filename': self.filename,
-                                    'contract': contract.name,
-                                    'modifier': modifier.name,
-                                    'sourceMapping': modifier.source_mapping})
+                    json = self.generate_json_result(info)
+                    elem = dict()
+                    elem['target'] = 'modifier'
+                    elem['convention'] = 'mixedCase'
+                    elem['name'] = modifier.name
+                    elem['source_mapping'] = modifier.source_mapping
+                    json['elements'] = [elem]
+                    results.append(json)
+
+        if all_info != '':
+            self.log(all_info)
 
         return results

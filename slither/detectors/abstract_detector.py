@@ -3,6 +3,7 @@ import re
 
 from slither.utils.colors import green, yellow, red
 
+from collections import OrderedDict
 
 class IncorrectDetectorInitialization(Exception):
     pass
@@ -35,6 +36,8 @@ class AbstractDetector(metaclass=abc.ABCMeta):
     IMPACT = None
     CONFIDENCE = None
 
+    WIKI = ''
+
     def __init__(self, slither, logger):
         self.slither = slither
         self.contracts = slither.contracts
@@ -64,7 +67,9 @@ class AbstractDetector(metaclass=abc.ABCMeta):
 
     def log(self, info):
         if self.logger:
-            info = " "+info
+            info = "\n"+info
+            if self.WIKI != '':
+                info += 'Reference: {}'.format(self.WIKI)
             self.logger.info(self.color(info))
 
     @abc.abstractmethod
@@ -75,3 +80,51 @@ class AbstractDetector(metaclass=abc.ABCMeta):
     @property
     def color(self):
         return classification_colors[self.IMPACT]
+
+    def generate_json_result(self, info):
+        d = OrderedDict()
+        d['check'] = self.ARGUMENT
+        d['impact'] = classification_txt[self.IMPACT]
+        d['confidence'] = classification_txt[self.CONFIDENCE]
+        d['description'] = info
+        d['elements'] = []
+        return d
+
+    @staticmethod
+    def add_variable_to_json(variable, d):
+        d['elements'].append({'type': 'variable',
+                              'name': variable.name,
+                              'source_mapping': variable.source_mapping})
+
+    @staticmethod
+    def add_variables_to_json(variables, d):
+        for variable in sorted(variables, key=lambda x:x.name):
+            AbstractDetector.add_variable_to_json(variable, d)
+
+    @staticmethod
+    def add_contract_to_json(contract, d):
+        d['elements'].append({'type': 'contract',
+                              'name': contract.name,
+                              'source_mapping': contract.source_mapping})
+
+    @staticmethod
+    def add_function_to_json(function, d):
+        contract = {'elements':[]}
+        AbstractDetector.add_contract_to_json(function.contract, contract)
+        d['elements'].append({'type': 'function',
+                              'name': function.name,
+                              'source_mapping': function.source_mapping,
+                              'contract': contract['elements'][0]})
+
+    @staticmethod
+    def add_functions_to_json(functions, d):
+        for function in sorted(functions, key=lambda x: x.name):
+            AbstractDetector.add_function_to_json(function, d)
+
+    @staticmethod
+    def add_nodes_to_json(nodes, d):
+        for node in sorted(nodes, key=lambda x: x.node_id):
+            d['elements'].append({'type': 'expression',
+                                  'expression': str(node.expression),
+                                  'source_mapping': node.source_mapping})
+

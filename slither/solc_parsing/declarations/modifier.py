@@ -50,7 +50,7 @@ class ModifierSolc(Modifier, FunctionSolc):
                 assert len(children) == 2
                 block = children[1]
                 assert block['name'] == 'Block'
-                self._isImplemented = True
+                self._is_implemented = True
                 self._parse_cfg(block)
 
         for local_vars in self.variables:
@@ -65,7 +65,7 @@ class ModifierSolc(Modifier, FunctionSolc):
     def _parse_statement(self, statement, node):
         name = statement[self.get_key()]
         if name == 'PlaceholderStatement':
-            placeholder_node = self._new_node(NodeType.PLACEHOLDER)
+            placeholder_node = self._new_node(NodeType.PLACEHOLDER, statement['src'])
             link_nodes(node, placeholder_node)
             return placeholder_node
         return super(ModifierSolc, self)._parse_statement(statement, node)

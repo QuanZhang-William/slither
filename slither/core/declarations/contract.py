@@ -190,15 +190,12 @@ class Contract(ChildSlither, SourceMapping):
         return [f for f in self.functions if f.is_writing(variable)]
 
     def is_signature_only(self):
-        """ Detect if the contracts is only an interface
+        """ Detect if the contract has only abstract functions
 
         Returns:
-            bool: true if the contract do no read or write
+            bool: true if the function are abstract functions
         """
-        for f in self.functions:
-            if f.variables_read_or_written:
-                return False
-        return True
+        return all((not f.is_implemented) for f in self.functions)
 
     def get_source_var_declaration(self, var):
         """ Return the source mapping where the variable is declared
@@ -305,7 +302,8 @@ class Contract(ChildSlither, SourceMapping):
 
     def is_erc20(self):
         """
-            Check if the contract is a erc20 token
+            Check if the contract is an erc20 token
+
             Note: it does not check for correct return values
         Returns:
             bool

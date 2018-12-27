@@ -12,9 +12,11 @@ class ExternalFunction(AbstractDetector):
     """
 
     ARGUMENT = 'external-function'
-    HELP = 'Detect public function that could be declared as external'
+    HELP = 'Public function that could be declared as external'
     IMPACT = DetectorClassification.INFORMATIONAL
     CONFIDENCE = DetectorClassification.HIGH
+
+    WIKI = 'https://github.com/trailofbits/slither/wiki/Vulnerabilities-Description#public-function-that-could-be-declared-as-external'
 
     @staticmethod
     def detect_functions_called(contract):
@@ -45,6 +47,7 @@ class ExternalFunction(AbstractDetector):
         results = []
 
         public_function_calls = []
+        all_info = ''
 
         for contract in self.slither.contracts_derived:
             if self._contains_internal_dynamic_call(contract):
@@ -56,15 +59,15 @@ class ExternalFunction(AbstractDetector):
             for func in [f for f in contract.functions if f.visibility == 'public' and\
                                                            not f in public_function_calls and\
                                                            not f.is_constructor]:
-                func_name = func.name
-                txt = "Public function in {} Contract: {}, Function: {} should be declared external"
-                info = txt.format(self.filename,
-                                  contract.name,
-                                  func_name)
-                self.log(info)
-                results.append({'vuln': 'ExternalFunc',
-                                'sourceMapping': func.source_mapping,
-                                'filename': self.filename,
-                                'contract': contract.name,
-                                'func': func_name})
+                txt = "{}.{} ({}) should be declared external\n"
+                info = txt.format(func.contract.name,
+                                  func.name,
+                                  func.source_mapping_str)
+                all_info += info
+
+                json = self.generate_json_result(info)
+                self.add_function_to_json(func, json)
+                results.append(json)
+        if all_info != '':
+            self.log(all_info)
         return results

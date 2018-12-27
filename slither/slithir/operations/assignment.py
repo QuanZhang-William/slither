@@ -25,7 +25,7 @@ class Assignment(OperationWithLValue):
 
     @property
     def read(self):
-        return list(self.variables)
+        return [self.rvalue]
 
     @property
     def read_right(self):
@@ -40,4 +40,4 @@ class Assignment(OperationWithLValue):
         return self._rvalue
 
     def __str__(self):
-        return '{} := {}'.format(self.lvalue, self.rvalue)
+        return '{}({}) := {}({})'.format(self.lvalue, self.lvalue.type, self.rvalue, self.rvalue.type)

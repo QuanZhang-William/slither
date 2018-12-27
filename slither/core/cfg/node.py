@@ -140,6 +140,10 @@ class Node(SourceMapping, ChildFunction):
         """
         return self._node_type
 
+    @type.setter
+    def type(self, t):
+        self._node_type = t
+
     @property
     def variables_read(self):
         """
@@ -395,7 +399,7 @@ class Node(SourceMapping, ChildFunction):
                     while isinstance(var, ReferenceVariable):
                         var = var.points_to
                 # Only store non-slithIR variables
-                if not is_slithir_var(var):
+                if not is_slithir_var(var) and var:
                     self._vars_written.append(var)
 
             if isinstance(ir, InternalCall):

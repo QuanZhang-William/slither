@@ -12,18 +12,21 @@ class Backdoor(AbstractDetector):
     CONFIDENCE = DetectorClassification.HIGH
 
     def detect(self):
-        ret = []
+        results = []
 
         for contract in self.slither.contracts_derived:
             # Check if a function has 'backdoor' in its name
             for f in contract.functions:
                 if 'backdoor' in f.name:
                     # Info to be printed
-                    info = 'Backdoor function found in {}.{}'.format(contract.name, f.name)
+                    info = 'Backdoor function found in {}.{} ({})\n'
+                    info = info.format(contract.name, f.name, f.source_mapping_str)
                     # Print the info
                     self.log(info)
-                    # Add the result in ret
-                    source = f.source_mapping
-                    ret.append({'vuln': 'backdoor', 'contract': contract.name, 'sourceMapping' : source})
+                    # Add the result in result
+                    json = self.generate_json_result(info)
+                    self.add_function_to_json(f, json)
+                    results.append(json)
 
-        return ret
+
+        return results

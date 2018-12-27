@@ -23,6 +23,8 @@ class ConstCandidateStateVars(AbstractDetector):
     IMPACT = DetectorClassification.INFORMATIONAL
     CONFIDENCE = DetectorClassification.HIGH
 
+    WIKI = 'https://github.com/trailofbits/slither/wiki/Vulnerabilities-Description#state-variables-that-could-be-declared-constant'
+
     @staticmethod
     def lvalues_of_operations_with_lvalue(contract):
         ret = []
@@ -54,6 +56,7 @@ class ConstCandidateStateVars(AbstractDetector):
         """ Detect state variables that could be const
         """
         results = []
+        all_info = ''
         for c in self.slither.contracts_derived:
             const_candidates = self.detect_const_candidates(c)
             if const_candidates:
@@ -63,17 +66,16 @@ class ConstCandidateStateVars(AbstractDetector):
                     variables_by_contract[state_var.contract.name].append(state_var)
 
                 for contract, variables in variables_by_contract.items():
-                    variable_names = [v.name for v in variables]
-                    info = "State variables that could be const in %s, Contract: %s, Vars %s" % (self.filename,
-                                                                                                 contract,
-                                                                                                 str(variable_names))
-                    self.log(info)
+                    info = ''
+                    for v in variables:
+                        info += "{}.{} should be constant ({})\n".format(contract,
+                                                                         v.name,
+                                                                         v.source_mapping_str)
+                    all_info += info
+                    json = self.generate_json_result(info)
+                    self.add_variables_to_json(variables, json)
+                    results.append(json)
 
-                    sourceMapping = [v.source_mapping for v in const_candidates]
-
-                    results.append({'vuln': 'ConstStateVariableCandidates',
-                                    'sourceMapping': sourceMapping,
-                                    'filename': self.filename,
-                                    'contract': c.name,
-                                    'unusedVars': variable_names})
+        if all_info != '':
+            self.log(all_info)
         return results

@@ -47,7 +47,7 @@ def get_pointer_name(variable):
     return None
 
 
-def find_variable(var_name, caller_context):
+def find_variable(var_name, caller_context, referenced_declaration=None):
 
     if isinstance(caller_context, Contract):
         function = None
@@ -122,6 +122,11 @@ def find_variable(var_name, caller_context):
     contracts = contract.slither.contracts_as_dict()
     if var_name in contracts:
         return contracts[var_name]
+
+    if referenced_declaration:
+        for contract in contract.slither.contracts:
+            if contract.id == referenced_declaration:
+                return contract
 
     raise VariableNotFound('Variable not found: {}'.format(var_name))
 
@@ -211,6 +216,7 @@ def filter_name(value):
     value = value.replace(' pure', '')
     value = value.replace(' view', '')
     value = value.replace(' constant', '')
+    value = value.replace(' payable', '')
     value = value.replace('function (', 'function(')
     value = value.replace('returns (', 'returns(')
 
@@ -374,7 +380,7 @@ def parse_expression(expression, caller_context):
 
         if is_compact_ast:
             value = expression['value']
-            if not value:
+            if not value and value != "":
                 value = '0x'+expression['hexValue']
         else:
             value = expression['attributes']['value']
@@ -406,7 +412,11 @@ def parse_expression(expression, caller_context):
                 value = value+'('+found[0]+')'
                 value = filter_name(value)
 
-        var = find_variable(value, caller_context)
+        if 'referencedDeclaration' in expression:
+            referenced_declaration = expression['referencedDeclaration']
+        else:
+            referenced_declaration = None
+        var = find_variable(value, caller_context, referenced_declaration)
 
         identifier = Identifier(var)
         return identifier
