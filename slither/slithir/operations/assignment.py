@@ -14,7 +14,7 @@ class Assignment(OperationWithLValue):
         assert is_valid_lvalue(left_variable)
         assert is_valid_rvalue(right_variable) or isinstance(right_variable, (Function, TupleVariable))
         super(Assignment, self).__init__()
-        self._variables = [left_variable, right_variable]
+        self._variables = [right_variable]
         self._lvalue = left_variable
         self._rvalue = right_variable
         self._variable_return_type = variable_return_type
@@ -26,6 +26,10 @@ class Assignment(OperationWithLValue):
     @property
     def read(self):
         return list(self.variables)
+
+    @property
+    def read_right(self):
+        return [self._rvalue]
 
     @property
     def variable_return_type(self):

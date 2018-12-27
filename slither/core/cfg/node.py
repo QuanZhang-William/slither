@@ -11,10 +11,12 @@ from slither.core.source_mapping.source_mapping import SourceMapping
 from slither.core.variables.state_variable import StateVariable
 from slither.core.variables.variable import Variable
 from slither.slithir.convert import convert_expression
+from slither.core.expressions.index_access import IndexAccess
+from slither.core.expressions.member_access import MemberAccess
 from slither.slithir.operations import (Balance, HighLevelCall, Index,
                                         InternalCall, Length, LibraryCall,
                                         LowLevelCall, Member,
-                                        OperationWithLValue, SolidityCall)
+                                        OperationWithLValue, SolidityCall, Assignment)
 from slither.slithir.variables import (Constant, ReferenceVariable,
                                        TemporaryVariable, TupleVariable)
 from slither.visitors.expression.expression_printer import ExpressionPrinter
@@ -368,8 +370,22 @@ class Node(SourceMapping, ChildFunction):
         def is_slithir_var(var):
             return isinstance(var, (Constant, ReferenceVariable, TemporaryVariable, TupleVariable))
 
+        prev_type = None
         for ir in self.irs:
-            self._vars_read += [v for v in ir.read if not is_slithir_var(v)]
+            #self._vars_read += [v for v in ir.read if not is_slithir_var(v)]
+            if isinstance(ir, Assignment) and prev_type == "Index":
+                if isinstance(self.expression.expression_left, IndexAccess):
+                    del self._vars_read[-1]
+
+            if isinstance(ir, Assignment) and prev_type == "Member":
+                if isinstance(self.expression.expression_left, MemberAccess):
+                    del self._vars_read[-1]
+
+            prev_type = type(ir).__name__
+            for v in ir.read:
+                if not is_slithir_var(v):
+                    self._vars_read.append(v)
+
             if isinstance(ir, OperationWithLValue):
                 if isinstance(ir, (Index, Member, Length, Balance)):
                     continue  # Don't consider Member and Index operations -> ReferenceVariable
@@ -399,6 +415,7 @@ class Node(SourceMapping, ChildFunction):
             elif isinstance(ir, LibraryCall):
                 assert isinstance(ir.destination, Contract)
                 self._high_level_calls.append((ir.destination, ir.function))
+
 
         self._vars_read = list(set(self._vars_read))
         self._state_vars_read = [v for v in self._vars_read if isinstance(v, StateVariable)]

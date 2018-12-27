@@ -7,6 +7,8 @@ from slither.slithir.utils.utils import is_valid_lvalue, is_valid_rvalue
 
 
 class Index(OperationWithLValue):
+    left_variable = None
+    right_variable = None
 
     def __init__(self, result, left_variable, right_variable, index_type):
         super(Index, self).__init__()
@@ -16,10 +18,16 @@ class Index(OperationWithLValue):
         self._variables = [left_variable, right_variable]
         self._type = index_type
         self._lvalue = result
+        self.left_variable = left_variable
+        self.right_variable = right_variable
 
     @property
     def read(self):
-        return list(self.variables)
+        return list(self._variables)
+
+    @property
+    def read_right(self):
+        return [self._variables[1]]
 
     @property
     def variables(self):

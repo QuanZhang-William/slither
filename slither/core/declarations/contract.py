@@ -250,6 +250,9 @@ class Contract(ChildSlither, SourceMapping):
         """
         return next((v for v in self.state_variables if v.name == variable_name), None)
 
+    def get_all_state_variables(self):
+        return self.state_variables
+
     def get_structure_from_name(self, structure_name):
         """
             Return a structure from a name
