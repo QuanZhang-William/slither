@@ -5,6 +5,7 @@ import logging
 from slither.core.children.child_slither import ChildSlither
 from slither.core.source_mapping.source_mapping import SourceMapping
 from slither.core.declarations.function import Function
+#from slither.solc_parsing.declarations.function import FunctionSolc
 
 logger = logging.getLogger("Contract")
 
@@ -188,6 +189,32 @@ class Contract(ChildSlither, SourceMapping):
             Return the functions writting the variable
         '''
         return [f for f in self.functions if f.is_writing(variable)]
+
+    def get_functions_writing_to_variable_including_internal_call(self, variable):
+        '''
+            Return the functions writting the variable
+        '''
+
+        res = []
+
+        for f in self.functions:
+            if f.is_writing(variable):
+                res.append(f)
+
+            # Check the state read/write in the function's internal call
+            for internal_call in f.internal_calls:
+
+                # Todo: Fix circular dependency and us isinstance
+                #if isinstance(internal_call, FunctionSolc):
+                func_type = str(type(internal_call))
+                if 'FunctionSolc' in func_type and internal_call.is_writing(variable):
+                    res.append(f)
+
+            # Data dependency in modifiers
+            for m in f.modifiers:
+                if variable in m.state_variables_written:
+                    res.append(f)
+        return res
 
     def is_signature_only(self):
         """ Detect if the contract has only abstract functions
