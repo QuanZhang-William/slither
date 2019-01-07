@@ -184,6 +184,49 @@ class Contract(ChildSlither, SourceMapping):
         '''
         return [f for f in self.functions if f.is_reading(variable)]
 
+    def get_functions_reading_from_variable_including_internal_call(self, variable):
+        '''
+            Return the functions reading the variable including internal calls
+        '''
+
+        res = []
+
+        for f in self.functions:
+            if f.is_reading(variable):
+                res.append(f)
+
+            res += self._recursive_internal_call_reading_helper(variable, f, [], 0, f)
+
+            # Data dependency in modifiers
+            for m in f.modifiers:
+                if variable in m.state_variables_read:
+                    res.append(f)
+
+                for modifier_func in m.internal_calls:
+                    res += self._recursive_internal_call_reading_helper(variable, modifier_func, [], 0, f)
+
+        return set(res)
+
+    def _recursive_internal_call_reading_helper(self, variable, func, recursive_usage, depth, root_func):
+
+        # Max call depth is set to 3
+        if depth > 3:
+            return recursive_usage
+
+        func_type = str(type(func))
+        if 'FunctionSolc' in func_type:
+            if func.is_reading(variable):
+                recursive_usage.append(root_func)
+
+            for internal_call in func.internal_calls:
+
+                # if isinstance(internal_call, FunctionSolc):
+                func_type = str(type(internal_call))
+                if 'FunctionSolc' in func_type:
+                    self._recursive_internal_call_reading_helper(variable, internal_call, recursive_usage, depth + 1, root_func)
+
+        return recursive_usage
+
     def get_functions_writing_to_variable(self, variable):
         '''
             Return the functions writting the variable
@@ -192,7 +235,7 @@ class Contract(ChildSlither, SourceMapping):
 
     def get_functions_writing_to_variable_including_internal_call(self, variable):
         '''
-            Return the functions writting the variable
+            Return the functions writting the variable including internal calls
         '''
 
         res = []
@@ -201,20 +244,37 @@ class Contract(ChildSlither, SourceMapping):
             if f.is_writing(variable):
                 res.append(f)
 
-            # Check the state read/write in the function's internal call
-            for internal_call in f.internal_calls:
-
-                # Todo: Fix circular dependency and us isinstance
-                #if isinstance(internal_call, FunctionSolc):
-                func_type = str(type(internal_call))
-                if 'FunctionSolc' in func_type and internal_call.is_writing(variable):
-                    res.append(f)
+            res += self._recursive_internal_call_writing_helper(variable, f, [], 0, f)
 
             # Data dependency in modifiers
             for m in f.modifiers:
                 if variable in m.state_variables_written:
                     res.append(f)
-        return res
+
+                for modifier_func in m.internal_calls:
+                    res += self._recursive_internal_call_writing_helper(variable, modifier_func, [], 0, f)
+
+        return set(res)
+
+    def _recursive_internal_call_writing_helper(self, variable, func, recursive_usage, depth, root_func):
+
+        # Max call depth is set to 3
+        if depth > 3:
+            return recursive_usage
+
+        func_type = str(type(func))
+        if 'FunctionSolc' in func_type:
+            if func.is_writing(variable):
+                recursive_usage.append(root_func)
+
+            for internal_call in func.internal_calls:
+
+                # if isinstance(internal_call, FunctionSolc):
+                func_type = str(type(internal_call))
+                if 'FunctionSolc' in func_type:
+                    self._recursive_internal_call_writing_helper(variable, internal_call, recursive_usage, depth + 1, root_func)
+
+        return recursive_usage
 
     def is_signature_only(self):
         """ Detect if the contract has only abstract functions

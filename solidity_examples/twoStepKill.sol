@@ -4,7 +4,6 @@ contract Suicide {
 
     modifier onlyOwner{
       if(msg.sender != owner) revert();
-      a = 5;
       _;
     }
 
@@ -16,12 +15,5 @@ contract Suicide {
         selfdestruct(msg.sender);
     }
 
-    function caller() public{
-        called();
-    }
-
-    function called() public{
-        a = 10;
-    }
 
 }
