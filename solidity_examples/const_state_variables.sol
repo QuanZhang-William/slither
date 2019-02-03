@@ -17,8 +17,6 @@ contract A {
         if (msg.sender == MY_ADDRESS) {
             used = test;
         }
-
-        selfdestruct(MY_ADDRESS);
     }
 }
 
@@ -26,13 +24,19 @@ contract A {
 contract B is A {
 
     address public mySistersAddress = 0x999999cf1046e68e36E1aA2E0E07105eDDD1f08E;
+    uint256 aa = 1;
 
     function () external {
         used = 0;
     }
 
     function setUsed(uint a) public {
-        if (msg.sender == mySistersAddress) {
+
+        if (false){
+            aa = 2;
+        }
+
+        if (msg.sender == MY_ADDRESS) {
             used = a;
         }
     }

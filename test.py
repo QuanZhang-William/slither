@@ -1,12 +1,18 @@
 from slither.slither import Slither
 
-slither = Slither('solidity_examples/recursive_test.sol')
-contract = slither.get_contract_from_name('Suicide')
-var_a = contract.get_state_variable_from_name('owner')
+slither = Slither('solidity_examples/const_state_variables.sol')
+contract = slither.get_contract_from_name('B')
+s_v = contract.state_variables
+var_a = contract.get_state_variable_from_name('aa')
 functions_reading = contract.get_functions_reading_from_variable(var_a)
 functions_writing_a = contract.get_functions_writing_to_variable_including_internal_call(var_a)
 functions_reading_a = contract.get_functions_reading_from_variable_including_internal_call(var_a)
+
+
+#for func in functions_writing_a:
+#    testt = func.func_signature_mythril_compact()
 #testa = contract.all_functions_called()
+
 
 
 # Print the result
