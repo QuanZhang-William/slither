@@ -16,7 +16,7 @@ from slither.detectors.abstract_detector import (AbstractDetector,
 from slither.printers.abstract_printer import AbstractPrinter
 from slither.slither import Slither
 from slither.utils.colors import red
-from slither.utils.command_line import output_to_markdown, output_detectors, output_printers, output_detectors_json
+from slither.utils.command_line import output_to_markdown, output_detectors, output_printers, output_detectors_json, output_wiki
 
 logging.basicConfig()
 logger = logging.getLogger("Slither")
@@ -84,7 +84,7 @@ def process_files(filenames, args, detector_classes, printer_classes):
     all_contracts = []
 
     for filename in filenames:
-        with open(filename) as f:
+        with open(filename, encoding='utf8') as f:
             contract_loaded = json.load(f)
             all_contracts.append(contract_loaded['ast'])
 
@@ -93,7 +93,7 @@ def process_files(filenames, args, detector_classes, printer_classes):
 
 
 def output_json(results, filename):
-    with open(filename, 'w') as f:
+    with open(filename, 'w', encoding='utf8') as f:
         json.dump(results, f)
 
 
@@ -112,12 +112,14 @@ def get_detectors_and_printers():
     from slither.detectors.variables.uninitialized_storage_variables import UninitializedStorageVars
     from slither.detectors.variables.uninitialized_local_variables import UninitializedLocalVars
     from slither.detectors.attributes.constant_pragma import ConstantPragma
-    from slither.detectors.attributes.old_solc import OldSolc
+    from slither.detectors.attributes.incorrect_solc import IncorrectSolc
     from slither.detectors.attributes.locked_ether import LockedEther
     from slither.detectors.functions.arbitrary_send import ArbitrarySend
     from slither.detectors.functions.suicidal import Suicidal
     from slither.detectors.functions.complex_function import ComplexFunction
-    from slither.detectors.reentrancy.reentrancy import Reentrancy
+    from slither.detectors.reentrancy.reentrancy_benign import ReentrancyBenign
+    from slither.detectors.reentrancy.reentrancy_read_before_write import ReentrancyReadBeforeWritten
+    from slither.detectors.reentrancy.reentrancy_eth import ReentrancyEth
     from slither.detectors.variables.unused_state_variables import UnusedStateVars
     from slither.detectors.variables.possible_const_state_variables import ConstCandidateStateVars
     from slither.detectors.statements.tx_origin import TxOrigin
@@ -130,17 +132,21 @@ def get_detectors_and_printers():
     from slither.detectors.attributes.const_functions import ConstantFunctions
     from slither.detectors.shadowing.abstract import ShadowingAbstractDetection
     from slither.detectors.shadowing.state import StateShadowing
+    from slither.detectors.shadowing.local import LocalShadowing
+    from slither.detectors.shadowing.builtin_symbols import BuiltinSymbolShadowing
     from slither.detectors.operations.block_timestamp import Timestamp
     from slither.detectors.statements.calls_in_loop import MultipleCallsInLoop
-
+    from slither.detectors.statements.incorrect_strict_equality import IncorrectStrictEquality
 
     detectors = [Backdoor,
                  UninitializedStateVarsDetection,
                  UninitializedStorageVars,
                  UninitializedLocalVars,
                  ConstantPragma,
-                 OldSolc,
-                 Reentrancy,
+                 IncorrectSolc,
+                 ReentrancyBenign,
+                 ReentrancyReadBeforeWritten,
+                 ReentrancyEth,
                  LockedEther,
                  ArbitrarySend,
                  Suicidal,
@@ -158,7 +164,10 @@ def get_detectors_and_printers():
                  ShadowingAbstractDetection,
                  StateShadowing,
                  Timestamp,
-                 MultipleCallsInLoop]
+                 MultipleCallsInLoop,
+                 IncorrectStrictEquality,
+                 LocalShadowing,
+                 BuiltinSymbolShadowing]
 
     from slither.printers.summary.function import FunctionSummary
     from slither.printers.summary.contract import ContractSummary
@@ -167,7 +176,9 @@ def get_detectors_and_printers():
     from slither.printers.call.call_graph import PrinterCallGraph
     from slither.printers.functions.authorization import PrinterWrittenVariablesAndAuthorization
     from slither.printers.summary.slithir import PrinterSlithIR
+    from slither.printers.summary.slithir_ssa import PrinterSlithIRSSA
     from slither.printers.summary.human_summary import PrinterHumanSummary
+    from slither.printers.functions.cfg import CFG
 
     printers = [FunctionSummary,
                 ContractSummary,
@@ -176,7 +187,9 @@ def get_detectors_and_printers():
                 PrinterCallGraph,
                 PrinterWrittenVariablesAndAuthorization,
                 PrinterSlithIR,
-                PrinterHumanSummary]
+                PrinterSlithIRSSA,
+                PrinterHumanSummary,
+                CFG]
 
     # Handle plugins!
     for entry_point in iter_entry_points(group='slither_analyzer.plugin', name=None):
@@ -223,6 +236,7 @@ def main_impl(all_detector_classes, all_printer_classes):
                               ('FunctionSolc', default_log),
                               ('ExpressionParsing', default_log),
                               ('TypeParsing', default_log),
+                              ('SSA_Conversion', default_log),
                               ('Printers', default_log)]:
         l = logging.getLogger(l_name)
         l.setLevel(l_level)
@@ -260,6 +274,8 @@ def main_impl(all_detector_classes, all_printer_classes):
         if args.json:
             output_json(results, args.json)
         # Dont print the number of result for printers
+        if number_contracts == 0:
+            logger.warn(red('No contract was analyzed'))
         if printer_classes:
             logger.info('%s analyzed (%d contracts)', filename, number_contracts)
         else:
@@ -385,7 +401,11 @@ def parse_args(detector_classes, printer_classes):
     parser.add_argument('--markdown',
                         help=argparse.SUPPRESS,
                         action=OutputMarkdown,
-                        nargs=0,
+                        default=False)
+
+    parser.add_argument('--wiki-detectors',
+                        help=argparse.SUPPRESS,
+                        action=OutputWiki,
                         default=False)
 
     parser.add_argument('--list-detectors-json',
@@ -432,12 +452,16 @@ class ListPrinters(argparse.Action):
         parser.exit()
 
 class OutputMarkdown(argparse.Action):
-    def __call__(self, parser, *args, **kwargs):
+    def __call__(self, parser, args, values, option_string=None):
         detectors, printers = get_detectors_and_printers()
-        output_to_markdown(detectors, printers)
+        output_to_markdown(detectors, printers, values)
         parser.exit()
 
-
+class OutputWiki(argparse.Action):
+    def __call__(self, parser, args, values, option_string=None):
+        detectors, _ = get_detectors_and_printers()
+        output_wiki(detectors, values)
+        parser.exit()
 
 def choose_detectors(args, all_detector_classes):
     # If detectors are specified, run only these ones

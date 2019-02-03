@@ -35,8 +35,11 @@ class Function(ChildContract, SourceMapping):
         self._entry_point = None
         self._nodes = []
         self._variables = {}
+        self._slithir_variables = set() # slithir Temporary and references variables (but not SSA)
         self._parameters = []
+        self._parameters_ssa = []
         self._returns = []
+        self._returns_ssa = []
         self._vars_read = []
         self._vars_written = []
         self._state_vars_read = []
@@ -53,8 +56,24 @@ class Function(ChildContract, SourceMapping):
         self._expression_calls = []
         self._expression_modifiers = []
         self._modifiers = []
+        self._explicit_base_constructor_calls = []
         self._payable = False
         self._contains_assembly = False
+
+        self._expressions = None
+        self._slithir_operations = None
+
+        self._all_expressions = None
+        self._all_slithir_operations = None
+        self._all_internals_calls = None
+        self._all_high_level_calls = None
+        self._all_low_level_calls = None
+        self._all_state_variables_read = None
+        self._all_solidity_variables_read = None
+        self._all_state_variables_written = None
+        self._all_conditional_state_variables_read = None
+        self._all_conditional_solidity_variables_read = None
+        self._all_solidity_variables_used_as_args = None
 
     @property
     def contains_assembly(self):
@@ -63,13 +82,21 @@ class Function(ChildContract, SourceMapping):
     @property
     def return_type(self):
         """
-            Return the list of return type 
+            Return the list of return type
             If no return, return None
         """
         returns = self.returns
         if returns:
             return [r.type for r in returns]
         return None
+
+    @property
+    def type(self):
+        """
+            Return the list of return type
+            If no return, return None
+        """
+        return self.return_type
 
     @property
     def name(self):
@@ -154,6 +181,16 @@ class Function(ChildContract, SourceMapping):
         return list(self._parameters)
 
     @property
+    def parameters_ssa(self):
+        """
+            list(LocalIRVariable): List of the parameters (SSA form)
+        """
+        return list(self._parameters_ssa)
+
+    def add_parameter_ssa(self, var):
+        self._parameters_ssa.append(var)
+
+    @property
     def returns(self):
         """
             list(LocalVariable): List of the return variables
@@ -161,11 +198,32 @@ class Function(ChildContract, SourceMapping):
         return list(self._returns)
 
     @property
+    def returns_ssa(self):
+        """
+            list(LocalIRVariable): List of the return variables (SSA form)
+        """
+        return list(self._returns_ssa)
+
+    def add_return_ssa(self, var):
+        self._returns_ssa.append(var)
+
+    @property
     def modifiers(self):
         """
             list(Modifier): List of the modifiers
         """
         return list(self._modifiers)
+
+    @property
+    def explicit_base_constructor_calls(self):
+        """
+            list(Function): List of the base constructors called explicitly by this presumed constructor definition.
+
+                            Base constructors implicitly or explicitly called by the contract definition will not be
+                            included.
+        """
+        # This is a list of contracts internally, so we convert it to a list of constructor functions.
+        return [c.constructor_not_inherited for c in self._explicit_base_constructor_calls if c.constructor_not_inherited]
 
     def __str__(self):
         return self._name
@@ -239,6 +297,14 @@ class Function(ChildContract, SourceMapping):
         return self._expression_vars_written
 
     @property
+    def slithir_variables(self):
+        '''
+            Temporary and Reference Variables (not SSA form)
+        '''
+
+        return list(self._slithir_variables)
+
+    @property
     def internal_calls(self):
         """
             list(Function or SolidityFunction): List of function calls (that does not create a transaction)
@@ -289,9 +355,22 @@ class Function(ChildContract, SourceMapping):
         """
             list(Expression): List of the expressions
         """
-        expressions = [n.expression for n in self.nodes]
-        expressions = [e for e in expressions if e]
-        return expressions
+        if self._expressions is None:
+            expressions = [n.expression for n in self.nodes]
+            expressions = [e for e in expressions if e]
+            self._expressions = expressions
+        return self._expressions
+
+    @property
+    def slithir_operations(self):
+        """
+            list(Operation): List of the slithir operations
+        """
+        if self._slithir_operations is None:
+            operations = [n.irs for n in self.nodes]
+            operations = [item for sublist in operations for item in sublist if item]
+            self._slithir_operations = operations
+        return self._slithir_operations
 
     @property
     def signature(self):
@@ -318,6 +397,18 @@ class Function(ChildContract, SourceMapping):
         """
         name, parameters, _ = self.signature
         return name+'('+','.join(parameters)+')'
+
+    @property
+    def functions_shadowed(self):
+        '''
+            Return the list of functions shadowed
+        Returns:
+            list(core.Function)
+
+        '''
+        candidates = [c.functions_not_inherited for c in self.contract.inheritance]
+        candidates = [candidate for sublist in candidates for candidate in sublist]
+        return [f for f in candidates if f.full_name == self.full_name]
 
 
     @property
@@ -382,6 +473,10 @@ class Function(ChildContract, SourceMapping):
                                     isinstance(x, (SolidityVariable))]
 
         self._vars_read_or_written = self._vars_written + self._vars_read
+
+        slithir_variables = [x.slithir_variables for x in self.nodes]
+        slithir_variables = [x for x in slithir_variables if x]
+        self._slithir_variables = [item for sublist in slithir_variables for item in sublist]
 
     def _analyze_calls(self):
         calls = [x.calls_as_expression for x in self.nodes]
@@ -451,41 +546,95 @@ class Function(ChildContract, SourceMapping):
     def all_state_variables_read(self):
         """ recursive version of variables_read
         """
-        return self._explore_functions(lambda x: x.state_variables_read)
+        if self._all_state_variables_read is None:
+            self._all_state_variables_read = self._explore_functions(
+                lambda x: x.state_variables_read)
+        return self._all_state_variables_read
 
     def all_solidity_variables_read(self):
         """ recursive version of solidity_read
         """
-        return self._explore_functions(lambda x: x.solidity_variables_read)
+        if self._all_solidity_variables_read is None:
+            self._all_solidity_variables_read = self._explore_functions(
+                lambda x: x.solidity_variables_read)
+        return self._all_solidity_variables_read
 
     def all_expressions(self):
         """ recursive version of variables_read
         """
-        return self._explore_functions(lambda x: x.expressions)
+        if self._all_expressions is None:
+            self._all_expressions = self._explore_functions(lambda x: x.expressions)
+        return self._all_expressions
+
+    def all_slithir_operations(self):
+        """
+        """
+        if self._all_slithir_operations is None:
+            self._all_slithir_operations = self._explore_functions(lambda x: x.slithir_operations)
+        return self._all_slithir_operations
 
     def all_state_variables_written(self):
         """ recursive version of variables_written
         """
-        return self._explore_functions(lambda x: x.state_variables_written)
+        if self._all_state_variables_written is None:
+            self._all_state_variables_written = self._explore_functions(
+                lambda x: x.state_variables_written)
+        return self._all_state_variables_written
 
     def all_internal_calls(self):
         """ recursive version of internal_calls
         """
-        return self._explore_functions(lambda x: x.internal_calls)
+        if self._all_internals_calls is None:
+            self._all_internals_calls = self._explore_functions(lambda x: x.internal_calls)
+        return self._all_internals_calls
 
-    def all_conditional_state_variables_read(self):
+    def all_low_level_calls(self):
+        """ recursive version of low_level calls
+        """
+        if self._all_low_level_calls is None:
+            self._all_low_level_calls = self._explore_functions(lambda x: x.low_level_calls)
+        return self._all_low_level_calls
+
+    def all_high_level_calls(self):
+        """ recursive version of high_level calls
+        """
+        if self._all_high_level_calls is None:
+            self._all_high_level_calls = self._explore_functions(lambda x: x.high_level_calls)
+        return self._all_high_level_calls
+
+    @staticmethod
+    def _explore_func_cond_read(func, include_loop):
+        ret = [n.state_variables_read for n in func.nodes if n.is_conditional(include_loop)]
+        return [item for sublist in ret for item in sublist]
+
+    def all_conditional_state_variables_read(self, include_loop=True):
         """
             Return the state variable used in a condition
 
             Over approximate and also return index access
             It won't work if the variable is assigned to a temp variable
         """
-        def _explore_func(func):
-            ret = [n.state_variables_read for n in func.nodes if n.is_conditional()]
-            return [item for sublist in ret for item in sublist]
-        return self._explore_functions(lambda x: _explore_func(x))
+        if self._all_conditional_state_variables_read is None:
+            self._all_conditional_state_variables_read = self._explore_functions(
+                lambda x: self._explore_func_cond_read(x,
+                                                       include_loop))
+        return self._all_conditional_state_variables_read
 
-    def all_conditional_solidity_variables_read(self):
+    @staticmethod
+    def _solidity_variable_in_binary(node):
+        from slither.slithir.operations.binary import Binary
+        ret = []
+        for ir in node.irs:
+            if isinstance(ir, Binary):
+                ret += ir.read
+        return [var for var in ret if isinstance(var, SolidityVariable)]
+
+    @staticmethod
+    def _explore_func_conditional(func, f, include_loop):
+        ret = [f(n) for n in func.nodes if n.is_conditional(include_loop)]
+        return [item for sublist in ret for item in sublist]
+
+    def all_conditional_solidity_variables_read(self, include_loop=True):
         """
             Return the Soldiity variables directly used in a condtion
 
@@ -493,17 +642,26 @@ class Function(ChildContract, SourceMapping):
             Assumption: the solidity vars are used directly in the conditional node
             It won't work if the variable is assigned to a temp variable
         """
-        from slither.slithir.operations.binary import Binary
-        def _solidity_variable_in_node(node):
-            ret = []
-            for ir in node.irs:
-                if isinstance(ir, Binary):
-                    ret += ir.read
-            return [var for var in ret if isinstance(var, SolidityVariable)]
-        def _explore_func(func, f):
-            ret = [f(n) for n in func.nodes if n.is_conditional()]
-            return [item for sublist in ret for item in sublist]
-        return self._explore_functions(lambda x: _explore_func(x, _solidity_variable_in_node))
+        if self._all_conditional_solidity_variables_read is None:
+            self._all_conditional_solidity_variables_read = self._explore_functions(
+                lambda x: self._explore_func_conditional(x,
+                                                         self._solidity_variable_in_binary,
+                                                         include_loop))
+        return self._all_conditional_solidity_variables_read
+
+    @staticmethod
+    def _solidity_variable_in_internal_calls(node):
+        from slither.slithir.operations.internal_call import InternalCall
+        ret = []
+        for ir in node.irs:
+            if isinstance(ir, InternalCall):
+                ret += ir.read
+        return [var for var in ret if isinstance(var, SolidityVariable)]
+
+    @staticmethod
+    def _explore_func_nodes(func, f):
+        ret = [f(n) for n in func.nodes]
+        return [item for sublist in ret for item in sublist]
 
     def all_solidity_variables_used_as_args(self):
         """
@@ -512,17 +670,10 @@ class Function(ChildContract, SourceMapping):
             Use of the IR to filter index access
             Used to catch check(msg.sender)
         """
-        from slither.slithir.operations.internal_call import InternalCall
-        def _solidity_variable_in_node(node):
-            ret = []
-            for ir in node.irs:
-                if isinstance(ir, InternalCall):
-                    ret += ir.read
-            return [var for var in ret if isinstance(var, SolidityVariable)]
-        def _explore_func(func, f):
-            ret = [f(n) for n in func.nodes]
-            return [item for sublist in ret for item in sublist]
-        return self._explore_functions(lambda x: _explore_func(x, _solidity_variable_in_node))
+        if self._all_solidity_variables_used_as_args is None:
+            self._all_solidity_variables_used_as_args = self._explore_functions(
+                lambda x: self._explore_func_nodes(x, self._solidity_variable_in_internal_calls))
+        return self._all_solidity_variables_used_as_args
 
     def is_reading(self, variable):
         """
@@ -587,7 +738,7 @@ class Function(ChildContract, SourceMapping):
         Args:
             filename (str)
         """
-        with open(filename, 'w') as f:
+        with open(filename, 'w', encoding='utf8') as f:
             f.write('digraph{\n')
             for node in self.nodes:
                 f.write('{}[label="{}"];\n'.format(node.node_id, str(node)))
@@ -603,16 +754,38 @@ class Function(ChildContract, SourceMapping):
             filename (str)
         """
         from slither.core.cfg.node import NodeType
-        with open(filename, 'w') as f:
+        with open(filename, 'w', encoding='utf8') as f:
             f.write('digraph{\n')
             for node in self.nodes:
-                label = 'Node Type: {}\n'.format(NodeType.str(node.type))
+                label = 'Node Type: {} {}\n'.format(NodeType.str(node.type), node.node_id)
                 if node.expression:
                     label += '\nEXPRESSION:\n{}\n'.format(node.expression)
+                if node.irs:
                     label += '\nIRs:\n' + '\n'.join([str(ir) for ir in node.irs])
                 f.write('{}[label="{}"];\n'.format(node.node_id, label))
                 for son in node.sons:
                     f.write('{}->{};\n'.format(node.node_id, son.node_id))
+
+            f.write("}\n")
+
+    def dominator_tree_to_dot(self, filename):
+        """
+            Export the dominator tree of the function to a dot file
+        Args:
+            filename (str)
+        """
+        def description(node):
+            desc ='{}\n'.format(node)
+            desc += 'id: {}'.format(node.node_id)
+            if node.dominance_frontier:
+                desc += '\ndominance frontier: {}'.format([n.node_id for n in node.dominance_frontier])
+            return desc
+        with open(filename, 'w', encoding='utf8') as f:
+            f.write('digraph{\n')
+            for node in self.nodes:
+                f.write('{}[label="{}"];\n'.format(node.node_id, description(node)))
+                if node.immediate_dominator:
+                    f.write('{}->{};\n'.format(node.immediate_dominator.node_id, node.node_id))
 
             f.write("}\n")
 
@@ -644,6 +817,16 @@ class Function(ChildContract, SourceMapping):
 
         if self.is_constructor:
             return True
-        conditional_vars = self.all_conditional_solidity_variables_read()
+        conditional_vars = self.all_conditional_solidity_variables_read(include_loop=False)
         args_vars = self.all_solidity_variables_used_as_args()
         return SolidityVariableComposed('msg.sender') in conditional_vars + args_vars
+
+    def get_local_variable_from_name(self, variable_name):
+        """
+            Return a local variable from a name
+        Args:
+            varible_name (str): name of the variable
+        Returns:
+            LocalVariable
+        """
+        return next((v for v in self.variables if v.name == variable_name), None)
