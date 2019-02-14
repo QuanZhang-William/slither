@@ -27,27 +27,9 @@ slither .
 Run Slither on a single file:
 ``` 
 $ slither tests/uninitialized.sol 
-[..]
-INFO:Detectors:
-Uninitialized.destination (tests/uninitialized.sol#5) is never initialized. It is used in:
-	- transfer (tests/uninitialized.sol#7-9)
-Reference: https://github.com/trailofbits/slither/wiki/Vulnerabilities-Description#uninitialized-state-variables
-[..]
 ``` 
 
-Slither can be run on:
-- A `.sol` file
-- A Truffle directory
-- A directory containing `*.sol` files (all the `*.sol` files will be analyzed)
-- A glob (be sure to quote the argument when using a glob) 
-
-###  Configuration
-
-* `--solc SOLC`: Path to `solc` (default 'solc')
-* `--solc-args SOLC_ARGS`: Add custom solc arguments. `SOLC_ARGS` can contain multiple arguments
-* `--disable-solc-warnings`: Do not print solc warnings
-* `--solc-ast`: Use the solc AST file as input (`solc file.sol --ast-json > file.ast.json`)
-* `--json FILE`: Export results as JSON
+For additional configuration, see the [usage](https://github.com/trailofbits/slither/wiki/Usage) documentation.
 
 ## Detectors
 
@@ -92,16 +74,20 @@ To run a printer, use `--print` and a comma-separated list of printers.
 
 Num | Printer | Description
 --- | --- | ---
-1 | `call-graph` | Export the call-graph of the contracts to a dot file
-2 | `cfg` | Export the CFG of each functions
-3 | `contract-summary` | Print a summary of the contracts
-4 | `function-summary` | Print a summary of the functions
-5 | `human-summary` | Print a human readable summary of the contracts
-6 | `inheritance` | Print the inheritance relations between contracts
-7 | `inheritance-graph` | Export the inheritance graph of each contract to a dot file
-8 | `slithir` | Print the slithIR representation of the functions
-9 | `slithir-ssa` | Print the slithIR representation of the functions
-10 | `vars-and-auth` | Print the state variables written and the authorization of the functions
+1 | `call-graph` | [Export the call-graph of the contracts to a dot file](https://github.com/trailofbits/slither/wiki/Printer-documentation#call-graph)
+2 | `cfg` | [Export the CFG of each functions](https://github.com/trailofbits/slither/wiki/Printer-documentation#cfg)
+3 | `contract-summary` | [Print a summary of the contracts](https://github.com/trailofbits/slither/wiki/Printer-documentation#contract-summary)
+4 | `data-dependency` | [Print the data dependencies of the variables](https://github.com/trailofbits/slither/wiki/Printer-documentation#data-dependencies)
+5 | `function-id` | [Print the keccack256 signature of the functions](https://github.com/trailofbits/slither/wiki/Printer-documentation#function-id)
+6 | `function-summary` | [Print a summary of the functions](https://github.com/trailofbits/slither/wiki/Printer-documentation#function-summary)
+7 | `human-summary` | [Print a human-readable summary of the contracts](https://github.com/trailofbits/slither/wiki/Printer-documentation#human-summary)
+8 | `inheritance` | [Print the inheritance relations between contracts](https://github.com/trailofbits/slither/wiki/Printer-documentation#inheritance)
+9 | `inheritance-graph` | [Export the inheritance graph of each contract to a dot file](https://github.com/trailofbits/slither/wiki/Printer-documentation#inheritance-graph)
+10 | `slithir` | [Print the slithIR representation of the functions](https://github.com/trailofbits/slither/wiki/Printer-documentation#slithir)
+11 | `slithir-ssa` | [Print the slithIR representation of the functions](https://github.com/trailofbits/slither/wiki/Printer-documentation#slithir-ssa)
+12 | `variables-order` | [Print the storage order of the state variables](https://github.com/trailofbits/slither/wiki/Printer-documentation#variables-written-and-authorization)
+13 | `vars-and-auth` | [Print the state variables written and the authorization of the functions](https://github.com/trailofbits/slither/wiki/Printer-documentation#variables-written-and-authorization)
+
 ## How to install
 
 Slither requires Python 3.6+ and [solc](https://github.com/ethereum/solidity/), the Solidity compiler.

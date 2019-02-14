@@ -6,13 +6,14 @@
 """
 
 from slither.core.cfg.node import NodeType
-from slither.core.declarations import Function, SolidityFunction
+from slither.core.declarations import Function, SolidityFunction, SolidityVariable
 from slither.core.expressions import UnaryOperation, UnaryOperationType
 from slither.detectors.abstract_detector import (AbstractDetector,
                                                  DetectorClassification)
 from slither.slithir.operations import (HighLevelCall, LowLevelCall,
                                         LibraryCall,
                                         Send, Transfer)
+from slither.core.variables.variable import Variable
 
 def union_dict(d1, d2):
     d3 = {k: d1.get(k, set()) | d2.get(k, set()) for k in set(list(d1.keys()) + list(d2.keys()))}
@@ -33,8 +34,7 @@ class Reentrancy(AbstractDetector):
 
     KEY = 'REENTRANCY'
 
-    @staticmethod
-    def _can_callback(irs):
+    def _can_callback(self, irs):
         """
             Detect if the node contains a call that can
             be used to re-entrance
@@ -49,6 +49,21 @@ class Reentrancy(AbstractDetector):
             if isinstance(ir, LowLevelCall):
                 return True
             if isinstance(ir, HighLevelCall) and not isinstance(ir, LibraryCall):
+                # If solidity >0.5, STATICCALL is used
+                if self.slither.solc_version and self.slither.solc_version.startswith('0.5.'):
+                    if isinstance(ir.function, Function) and (ir.function.view or ir.function.pure):
+                        continue
+                    if isinstance(ir.function, Variable):
+                        continue
+                # If there is a call to itself
+                # We can check that the function called is
+                # reentrancy-safe
+                if ir.destination == SolidityVariable('this'):
+                    if isinstance(ir.function, Variable):
+                        continue
+                    if not ir.function.all_high_level_calls():
+                        if not ir.function.all_low_level_calls():
+                            continue
                 return True
         return False
 

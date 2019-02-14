@@ -1,20 +1,19 @@
 """
-    Event module
 """
 import logging
 
 from slither.core.cfg.node import NodeType, link_nodes
+from slither.core.declarations.contract import Contract
 from slither.core.declarations.function import Function
 from slither.core.dominators.utils import (compute_dominance_frontier,
                                            compute_dominators)
 from slither.core.expressions import AssignmentOperation
 from slither.core.variables.state_variable import StateVariable
-from slither.slithir.operations import (Assignment, HighLevelCall,
-                                        InternalCall, InternalDynamicCall,
-                                        LowLevelCall, OperationWithLValue, Phi,
-                                        PhiCallback, LibraryCall)
+from slither.slithir.operations import (InternalCall, OperationWithLValue, Phi,
+                                        PhiCallback)
 from slither.slithir.utils.ssa import add_ssa_ir, transform_slithir_vars_to_ssa
-from slither.slithir.variables import LocalIRVariable, ReferenceVariable
+from slither.slithir.variables import (Constant, ReferenceVariable,
+                                       StateIRVariable)
 from slither.solc_parsing.cfg.node import NodeSolc
 from slither.solc_parsing.expressions.expression_parsing import \
     parse_expression
@@ -24,15 +23,14 @@ from slither.solc_parsing.variables.local_variable_init_from_tuple import \
 from slither.solc_parsing.variables.variable_declaration import \
     MultipleVariablesDeclaration
 from slither.utils.expression_manipulations import SplitTernaryExpression
+from slither.utils.utils import unroll
 from slither.visitors.expression.export_values import ExportValues
 from slither.visitors.expression.has_conditional import HasConditional
-from slither.core.declarations.contract import Contract
 
 logger = logging.getLogger("FunctionSolc")
 
 class FunctionSolc(Function):
     """
-    Event class
     """
     # elems = [(type, name)]
 
@@ -48,6 +46,21 @@ class FunctionSolc(Function):
         self._content_was_analyzed = False
         self._counter_nodes = 0
 
+        self._counter_scope_local_variables = 0
+        # variable renamed will map the solc id
+        # to the variable. It only works for compact format
+        # Later if an expression provides the referencedDeclaration attr
+        # we can retrieve the variable
+        # It only matters if two variables have the same name in the function
+        # which is only possible with solc > 0.5
+        self._variables_renamed = {}
+
+    ###################################################################################
+    ###################################################################################
+    # region AST format
+    ###################################################################################
+    ###################################################################################
+
     def get_key(self):
         return self.slither.get_key()
 
@@ -59,6 +72,37 @@ class FunctionSolc(Function):
     @property
     def is_compact_ast(self):
         return self.slither.is_compact_ast
+
+    # endregion
+    ###################################################################################
+    ###################################################################################
+    # region Variables
+    ###################################################################################
+    ###################################################################################
+
+    @property
+    def variables_renamed(self):
+        return self._variables_renamed
+
+    def _add_local_variable(self, local_var):
+        # If two local variables have the same name
+        # We add a suffix to the new variable
+        # This is done to prevent collision during SSA translation
+        # Use of while in case of collision
+        # In the worst case, the name will be really long
+        while local_var.name in self._variables:
+            local_var.name += "_scope_{}".format(self._counter_scope_local_variables)
+            self._counter_scope_local_variables += 1
+        if not local_var.reference_id is None:
+            self._variables_renamed[local_var.reference_id] = local_var
+        self._variables[local_var.name] = local_var
+
+    # endregion
+    ###################################################################################
+    ###################################################################################
+    # region Analyses
+    ###################################################################################
+    ###################################################################################
 
     def _analyze_attributes(self):
         if self.is_compact_ast:
@@ -103,6 +147,77 @@ class FunctionSolc(Function):
         if 'payable' in attributes:
             self._payable = attributes['payable']
 
+    def analyze_params(self):
+        # Can be re-analyzed due to inheritance
+        if self._params_was_analyzed:
+            return
+
+        self._params_was_analyzed = True
+
+        self._analyze_attributes()
+
+        if self.is_compact_ast:
+            params = self._functionNotParsed['parameters']
+            returns = self._functionNotParsed['returnParameters']
+        else:
+            children = self._functionNotParsed[self.get_children('children')]
+            params = children[0]
+            returns = children[1]
+
+        if params:
+            self._parse_params(params)
+        if returns:
+            self._parse_returns(returns)
+
+    def analyze_content(self):
+        if self._content_was_analyzed:
+            return
+
+        self._content_was_analyzed = True
+
+        if self.is_compact_ast:
+            body = self._functionNotParsed['body']
+
+            if body and body[self.get_key()] == 'Block':
+                self._is_implemented = True
+                self._parse_cfg(body)
+
+            for modifier in self._functionNotParsed['modifiers']:
+                self._parse_modifier(modifier)
+
+        else:
+            children = self._functionNotParsed[self.get_children('children')]
+            self._is_implemented = False
+            for child in children[2:]:
+                if child[self.get_key()] == 'Block':
+                    self._is_implemented = True
+                    self._parse_cfg(child)
+
+            # Parse modifier after parsing all the block
+            # In the case a local variable is used in the modifier
+            for child in children[2:]:
+                if child[self.get_key()] == 'ModifierInvocation':
+                    self._parse_modifier(child)
+
+        for local_vars in self.variables:
+            local_vars.analyze(self)
+
+        for node in self.nodes:
+            node.analyze_expressions(self)
+
+        self._filter_ternary()
+        self._remove_alone_endif()
+
+
+
+
+    # endregion
+    ###################################################################################
+    ###################################################################################
+    # region Nodes
+    ###################################################################################
+    ###################################################################################
+
     def _new_node(self, node_type, src):
         node = NodeSolc(node_type, self._counter_nodes)
         node.set_offset(src, self.slither)
@@ -110,6 +225,13 @@ class FunctionSolc(Function):
         node.set_function(self)
         self._nodes.append(node)
         return node
+
+    # endregion
+    ###################################################################################
+    ###################################################################################
+    # region Parsing function
+    ###################################################################################
+    ###################################################################################
 
     def _parse_if(self, ifStatement, node):
         # IfStatement = 'if' '(' Expression ')' Statement ( 'else' Statement )?
@@ -228,14 +350,26 @@ class FunctionSolc(Function):
         # if the loop has a init value /condition or expression
         # There is no way to determine that for(a;;) and for(;a;) are different with old solc
         if 'attributes' in statement:
+            attributes = statement['attributes']
             if 'initializationExpression' in statement:
                 if not statement['initializationExpression']:
                     hasInitExession = False
+            elif 'initializationExpression' in attributes:
+                if not attributes['initializationExpression']:
+                    hasInitExession = False
+
             if 'condition' in statement:
                 if not statement['condition']:
                     hasCondition = False
+            elif 'condition' in attributes:
+                if not attributes['condition']:
+                    hasCondition = False
+
             if 'loopExpression' in statement:
                 if not statement['loopExpression']:
+                    hasLoopExpression = False
+            elif 'loopExpression' in attributes:
+                if not attributes['loopExpression']:
                     hasLoopExpression = False
 
 
@@ -329,7 +463,7 @@ class FunctionSolc(Function):
             local_var.set_function(self)
             local_var.set_offset(statement['src'], self.contract.slither)
 
-            self._variables[local_var.name] = local_var
+            self._add_local_variable(local_var)
             #local_var.analyze(self)
 
             new_node = self._new_node(NodeType.VARIABLE, statement['src'])
@@ -491,7 +625,7 @@ class FunctionSolc(Function):
         local_var.set_function(self)
         local_var.set_offset(statement['src'], self.contract.slither)
 
-        self._variables[local_var.name] = local_var
+        self._add_local_variable(local_var)
 #        local_var.analyze(self)
 
         new_node = self._new_node(NodeType.VARIABLE, statement['src'])
@@ -620,20 +754,30 @@ class FunctionSolc(Function):
             self._remove_incorrect_edges()
             self._remove_alone_endif()
 
-    def _find_end_loop(self, node, visited):
+    # endregion
+    ###################################################################################
+    ###################################################################################
+    # region Loops
+    ###################################################################################
+    ###################################################################################
+
+    def _find_end_loop(self, node, visited, counter):
+        # counter allows to explore nested loop
         if node in visited:
             return None
 
         if node.type == NodeType.ENDLOOP:
-            return node
+            if counter == 0:
+                return node
+            counter -= 1
 
         # nested loop
         if node.type == NodeType.STARTLOOP:
-            return None
+            counter += 1
 
         visited = visited + [node]
         for son in node.sons:
-            ret = self._find_end_loop(son, visited)
+            ret = self._find_end_loop(son, visited, counter)
             if ret:
                 return ret
 
@@ -655,7 +799,7 @@ class FunctionSolc(Function):
         return None
 
     def _fix_break_node(self, node):
-        end_node = self._find_end_loop(node, [])
+        end_node = self._find_end_loop(node, [], 0)
 
         if not end_node:
             logger.error('Break in no-loop context {}'.format(node))
@@ -677,6 +821,72 @@ class FunctionSolc(Function):
             son.remove_father(node)
         node.set_sons([start_node])
         start_node.add_father(node)
+
+    def _parse_params(self, params):
+        assert params[self.get_key()] == 'ParameterList'
+
+        if self.is_compact_ast:
+            params = params['parameters']
+        else:
+            params = params[self.get_children('children')]
+
+        for param in params:
+            assert param[self.get_key()] == 'VariableDeclaration'
+
+            local_var = LocalVariableSolc(param)
+
+            local_var.set_function(self)
+            local_var.set_offset(param['src'], self.contract.slither)
+            local_var.analyze(self)
+
+            # see https://solidity.readthedocs.io/en/v0.4.24/types.html?highlight=storage%20location#data-location
+            if local_var.location == 'default':
+                local_var.set_location('memory')
+
+            self._add_local_variable(local_var)
+            self._parameters.append(local_var)
+
+    def _parse_returns(self, returns):
+
+        assert returns[self.get_key()] == 'ParameterList'
+
+        if self.is_compact_ast:
+            returns = returns['parameters']
+        else:
+            returns = returns[self.get_children('children')]
+
+        for ret in returns:
+            assert ret[self.get_key()] == 'VariableDeclaration'
+
+            local_var = LocalVariableSolc(ret)
+
+            local_var.set_function(self)
+            local_var.set_offset(ret['src'], self.contract.slither)
+            local_var.analyze(self)
+
+            # see https://solidity.readthedocs.io/en/v0.4.24/types.html?highlight=storage%20location#data-location
+            if local_var.location == 'default':
+                local_var.set_location('memory')
+
+            self._add_local_variable(local_var)
+            self._returns.append(local_var)
+
+
+    def _parse_modifier(self, modifier):
+        m = parse_expression(modifier, self)
+        self._expression_modifiers.append(m)
+        for m in ExportValues(m).result():
+            if isinstance(m, Function):
+                self._modifiers.append(m)
+            elif isinstance(m, Contract):
+                self._explicit_base_constructor_calls.append(m)
+
+    # endregion
+    ###################################################################################
+    ###################################################################################
+    # region Edges
+    ###################################################################################
+    ###################################################################################
 
     def _remove_incorrect_edges(self):
         for node in self._nodes:
@@ -719,127 +929,13 @@ class FunctionSolc(Function):
                     node.set_sons([])
                     to_remove.append(node)
             self._nodes = [n for n in self.nodes if not n in to_remove]
-#
-    def _parse_params(self, params):
-        assert params[self.get_key()] == 'ParameterList'
 
-        if self.is_compact_ast:
-            params = params['parameters']
-        else:
-            params = params[self.get_children('children')]
-
-        for param in params:
-            assert param[self.get_key()] == 'VariableDeclaration'
-
-            local_var = LocalVariableSolc(param)
-
-            local_var.set_function(self)
-            local_var.set_offset(param['src'], self.contract.slither)
-            local_var.analyze(self)
-
-            # see https://solidity.readthedocs.io/en/v0.4.24/types.html?highlight=storage%20location#data-location
-            if local_var.location == 'default':
-                local_var.set_location('memory')
-
-            self._variables[local_var.name] = local_var
-            self._parameters.append(local_var)
-
-    def _parse_returns(self, returns):
-
-        assert returns[self.get_key()] == 'ParameterList'
-
-        if self.is_compact_ast:
-            returns = returns['parameters']
-        else:
-            returns = returns[self.get_children('children')]
-
-        for ret in returns:
-            assert ret[self.get_key()] == 'VariableDeclaration'
-
-            local_var = LocalVariableSolc(ret)
-
-            local_var.set_function(self)
-            local_var.set_offset(ret['src'], self.contract.slither)
-            local_var.analyze(self)
-
-            # see https://solidity.readthedocs.io/en/v0.4.24/types.html?highlight=storage%20location#data-location
-            if local_var.location == 'default':
-                local_var.set_location('memory')
-
-            self._variables[local_var.name] = local_var
-            self._returns.append(local_var)
-
-
-    def _parse_modifier(self, modifier):
-        m = parse_expression(modifier, self)
-        self._expression_modifiers.append(m)
-        for m in ExportValues(m).result():
-            if isinstance(m, Function):
-                self._modifiers.append(m)
-            elif isinstance(m, Contract):
-                self._explicit_base_constructor_calls.append(m)
-
-
-    def analyze_params(self):
-        # Can be re-analyzed due to inheritance
-        if self._params_was_analyzed:
-            return
-
-        self._params_was_analyzed = True
-
-        self._analyze_attributes()
-
-        if self.is_compact_ast:
-            params = self._functionNotParsed['parameters']
-            returns = self._functionNotParsed['returnParameters']
-        else:
-            children = self._functionNotParsed[self.get_children('children')]
-            params = children[0]
-            returns = children[1]
-
-        if params:
-            self._parse_params(params)
-        if returns:
-            self._parse_returns(returns)
-
-    def analyze_content(self):
-        if self._content_was_analyzed:
-            return
-
-        self._content_was_analyzed = True
-
-        if self.is_compact_ast:
-            body = self._functionNotParsed['body']
-
-            if body and body[self.get_key()] == 'Block':
-                self._is_implemented = True
-                self._parse_cfg(body)
-
-            for modifier in self._functionNotParsed['modifiers']:
-                self._parse_modifier(modifier)
-
-        else:
-            children = self._functionNotParsed[self.get_children('children')]
-            self._is_implemented = False
-            for child in children[2:]:
-                if child[self.get_key()] == 'Block':
-                    self._is_implemented = True
-                    self._parse_cfg(child)
-    
-            # Parse modifier after parsing all the block
-            # In the case a local variable is used in the modifier
-            for child in children[2:]:
-                if child[self.get_key()] == 'ModifierInvocation':
-                    self._parse_modifier(child)
-
-        for local_vars in self.variables:
-            local_vars.analyze(self)
-
-        for node in self.nodes:
-            node.analyze_expressions(self)
-
-        self._filter_ternary()
-        self._remove_alone_endif()
+    # endregion
+    ###################################################################################
+    ###################################################################################
+    # region Ternary
+    ###################################################################################
+    ###################################################################################
 
     def _filter_ternary(self):
         ternary_found = True
@@ -856,6 +952,64 @@ class FunctionSolc(Function):
                     self.split_ternary_node(node, condition, true_expr, false_expr)
                     ternary_found = True
                     break
+
+    def split_ternary_node(self, node, condition, true_expr, false_expr):
+        condition_node = self._new_node(NodeType.IF, node.source_mapping)
+        condition_node.add_expression(condition)
+        condition_node.analyze_expressions(self)
+
+        if node.type == NodeType.VARIABLE:
+            condition_node.add_variable_declaration(node.variable_declaration)
+
+        true_node = self._new_node(NodeType.EXPRESSION, node.source_mapping)
+        if node.type == NodeType.VARIABLE:
+            assert isinstance(true_expr, AssignmentOperation)
+            #true_expr = true_expr.expression_right
+        elif node.type == NodeType.RETURN:
+            true_node.type = NodeType.RETURN
+        true_node.add_expression(true_expr)
+        true_node.analyze_expressions(self)
+
+        false_node = self._new_node(NodeType.EXPRESSION, node.source_mapping)
+        if node.type == NodeType.VARIABLE:
+            assert isinstance(false_expr, AssignmentOperation)
+        elif node.type == NodeType.RETURN:
+            false_node.type = NodeType.RETURN
+            #false_expr = false_expr.expression_right
+        false_node.add_expression(false_expr)
+        false_node.analyze_expressions(self)
+
+        endif_node = self._new_node(NodeType.ENDIF, node.source_mapping)
+
+        for father in node.fathers:
+            father.remove_son(node)
+            father.add_son(condition_node)
+            condition_node.add_father(father)
+
+        for son in node.sons:
+            son.remove_father(node)
+            son.add_father(endif_node)
+            endif_node.add_son(son)
+
+        link_nodes(condition_node, true_node)
+        link_nodes(condition_node, false_node)
+
+
+        if not true_node.type in [NodeType.THROW, NodeType.RETURN]:
+           link_nodes(true_node, endif_node)
+        if not false_node.type in [NodeType.THROW, NodeType.RETURN]:
+            link_nodes(false_node, endif_node)
+
+        self._nodes = [n for n in self._nodes if n.node_id != node.node_id]
+
+
+
+    # endregion
+    ###################################################################################
+    ###################################################################################
+    # region SlithIr and SSA
+    ###################################################################################
+    ###################################################################################
 
     def get_last_ssa_state_variables_instances(self):
         if not self.is_implemented:
@@ -917,9 +1071,19 @@ class FunctionSolc(Function):
         for node in self.nodes:
             for ir in node.irs_ssa:
                 if node == self.entry_point:
-                    additional = [initial_state_variables_instances[ir.lvalue.canonical_name]]
-                    additional += last_state_variables_instances[ir.lvalue.canonical_name]
-                    ir.rvalues = list(set(additional + ir.rvalues))
+                    if isinstance(ir.lvalue, StateIRVariable):
+                        additional = [initial_state_variables_instances[ir.lvalue.canonical_name]]
+                        additional += last_state_variables_instances[ir.lvalue.canonical_name]
+                        ir.rvalues = list(set(additional + ir.rvalues))
+                    # function parameter
+                    else:
+                        # find index of the parameter
+                        idx = self.parameters.index(ir.lvalue.non_ssa_version)
+                        # find non ssa version of that index
+                        additional = [n.ir.arguments[idx] for n in self.reachable_from_nodes]
+                        additional = unroll(additional)
+                        additional = [a for a in additional if not isinstance(a, Constant)]
+                        ir.rvalues = list(set(additional + ir.rvalues))
                 if isinstance(ir, PhiCallback):
                     callee_ir = ir.callee_ir
                     if isinstance(callee_ir, InternalCall):
@@ -950,54 +1114,4 @@ class FunctionSolc(Function):
         for node in self.nodes:
             node.update_read_write_using_ssa()
         self._analyze_read_write()
-
-    def split_ternary_node(self, node, condition, true_expr, false_expr):
-        condition_node = self._new_node(NodeType.IF, node.source_mapping)
-        condition_node.add_expression(condition)
-        condition_node.analyze_expressions(self)
-
-        if node.type == NodeType.VARIABLE:
-            condition_node.add_variable_declaration(node.variable_declaration)
-
-        true_node = self._new_node(NodeType.EXPRESSION, node.source_mapping)
-        if node.type == NodeType.VARIABLE:
-            assert isinstance(true_expr, AssignmentOperation)
-            #true_expr = true_expr.expression_right
-        elif node.type == NodeType.RETURN:
-            true_node.type = NodeType.RETURN
-        true_node.add_expression(true_expr)
-        true_node.analyze_expressions(self)
-
-        false_node = self._new_node(NodeType.EXPRESSION, node.source_mapping)
-        if node.type == NodeType.VARIABLE:
-            assert isinstance(false_expr, AssignmentOperation)
-        elif node.type == NodeType.RETURN:
-            false_node.type = NodeType.RETURN
-            #false_expr = false_expr.expression_right
-        false_node.add_expression(false_expr)
-        false_node.analyze_expressions(self)
-
-        endif_node = self._new_node(NodeType.ENDIF, node.source_mapping)
-
-        for father in node.fathers:
-            father.remove_son(node)
-            father.add_son(condition_node)
-            condition_node.add_father(father)
-
-        for son in node.sons:
-            son.remove_father(node)
-            son.add_father(endif_node)
-            endif_node.add_son(son)
-
-        link_nodes(condition_node, true_node)
-        link_nodes(condition_node, false_node)
-
-
-        if not true_node.type in [NodeType.THROW, NodeType.RETURN]:
-           link_nodes(true_node, endif_node)
-        if not false_node.type in [NodeType.THROW, NodeType.RETURN]:
-            link_nodes(false_node, endif_node)
-
-        self._nodes = [n for n in self._nodes if n.node_id != node.node_id]
-
 

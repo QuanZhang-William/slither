@@ -3,7 +3,9 @@ import json
 import re
 import logging
 
+logging.basicConfig()
 logger = logging.getLogger("SlitherSolcParsing")
+logger.setLevel(logging.INFO)
 
 from slither.solc_parsing.declarations.contract import ContractSolc04
 from slither.core.slither_core import Slither
@@ -24,6 +26,13 @@ class SlitherSolc(Slither):
 
         self._is_compact_ast = False
 
+
+    ###################################################################################
+    ###################################################################################
+    # region AST
+    ###################################################################################
+    ###################################################################################
+
     def get_key(self):
         if self._is_compact_ast:
             return 'nodeType'
@@ -38,11 +47,28 @@ class SlitherSolc(Slither):
     def is_compact_ast(self):
         return self._is_compact_ast
 
+    # endregion
+    ###################################################################################
+    ###################################################################################
+    # region Parsing
+    ###################################################################################
+    ###################################################################################
+
     def _parse_contracts_from_json(self, json_data):
         try:
             data_loaded = json.loads(json_data)
-            self._parse_contracts_from_loaded_json(data_loaded['ast'], data_loaded['sourcePath'])
-            return True 
+            # Truffle AST
+            if 'ast' in data_loaded:
+                self._parse_contracts_from_loaded_json(data_loaded['ast'], data_loaded['sourcePath'])
+                return True
+            # solc AST, where the non-json text was removed
+            else:
+                if 'attributes' in data_loaded:
+                    filename = data_loaded['attributes']['absolutePath']
+                else:
+                    filename = data_loaded['absolutePath']
+                self._parse_contracts_from_loaded_json(data_loaded, filename)
+                return True
         except ValueError:
 
             first = json_data.find('{')
@@ -136,8 +162,20 @@ class SlitherSolc(Slither):
                     source_code = f.read()
                 self.source_code[name] = source_code
 
+    # endregion
+    ###################################################################################
+    ###################################################################################
+    # region Analyze
+    ###################################################################################
+    ###################################################################################
+
+    @property
+    def analyzed(self):
+        return self._analyzed
 
     def _analyze_contracts(self):
+        if not self._contractsNotParsed:
+            logger.info(f'No contract were found in {self.filename}, check the correct compilation') 
         if self._analyzed:
             raise Exception('Contract analysis can be run only once!')
 
@@ -220,11 +258,6 @@ class SlitherSolc(Slither):
 
         compute_dependency(self)
 
-    # TODO refactor the following functions, and use a lambda function
-
-    @property
-    def analyzed(self):
-        return self._analyzed
 
     def _analyze_all_enums(self, contracts_to_be_analyzed):
         while contracts_to_be_analyzed:
@@ -343,8 +376,9 @@ class SlitherSolc(Slither):
     def _convert_to_slithir(self):
         for contract in self.contracts:
             contract.convert_expression_to_slithir()
+        self._propagate_function_calls()
         for contract in self.contracts:
             contract.fix_phi()
             contract.update_read_write_using_ssa()
 
-        
+    # endregion
