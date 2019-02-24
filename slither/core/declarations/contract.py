@@ -392,6 +392,35 @@ class Contract(ChildSlither, SourceMapping):
         '''
         return [f for f in self.functions if f.is_writing(variable)]
 
+    def get_recursive_data_read_in_functions(self):
+        res = {}
+
+        for f in self.functions:
+            func_type = str(type(f))
+            if 'FunctionSolc' in func_type:
+                res[f.full_name] = set()
+                self._get_recursive_data_usage_in_functions_helper(f, f.state_variables_read, 0, f)
+
+    def _get_recursive_data_usage_in_functions_helper(self, func, recursive_usage, depth, root_func):
+
+        # Max call depth is set to 3
+        if depth > 3:
+            return recursive_usage
+
+        func_type = str(type(func))
+        if 'FunctionSolc' in func_type:
+            if func.is_writing(variable):
+                recursive_usage.append(root_func)
+
+            for internal_call in func.internal_calls:
+
+                # if isinstance(internal_call, FunctionSolc):
+                func_type = str(type(internal_call))
+                if 'FunctionSolc' in func_type:
+                    self._recursive_internal_call_writing_helper(variable, internal_call, recursive_usage, depth + 1, root_func)
+
+        return recursive_usage
+
     def get_functions_writing_to_variable_including_internal_call(self, variable):
         '''
             Return the functions writting the variable including internal calls
@@ -400,15 +429,18 @@ class Contract(ChildSlither, SourceMapping):
         res = []
 
         for f in self.functions:
+            if f.visibility != 'public':
+                continue
+
             if f.is_writing(variable):
-                res.append(f)
+                res.append(f.full_name)
 
             res += self._recursive_internal_call_writing_helper(variable, f, [], 0, f)
 
             # Data dependency in modifiers
             for m in f.modifiers:
                 if variable in m.state_variables_written:
-                    res.append(f)
+                    res.append(f.full_name)
 
                 for modifier_func in m.internal_calls:
                     res += self._recursive_internal_call_writing_helper(variable, modifier_func, [], 0, f)
@@ -424,7 +456,7 @@ class Contract(ChildSlither, SourceMapping):
         func_type = str(type(func))
         if 'FunctionSolc' in func_type:
             if func.is_writing(variable):
-                recursive_usage.append(root_func)
+                recursive_usage.append(root_func.full_name)
 
             for internal_call in func.internal_calls:
 

@@ -363,6 +363,55 @@ class Function(ChildContract, SourceMapping):
         """
         return list(self._state_vars_written)
 
+    def state_variables_written_including_internal_calls_helper(self, functions, max_depth, i, recursive_usage):
+        if i >= max_depth:
+            return recursive_usage
+
+        for func in functions:
+            func_type = str(type(func))
+            if 'FunctionSolc' not in func_type:
+                continue
+
+            recursive_usage = recursive_usage.union(set(func.state_variables_written))
+            self.state_variables_written_including_internal_calls_helper(func.internal_calls, max_depth, i + 1, recursive_usage)
+
+        return recursive_usage
+
+    @property
+    def state_variables_written_including_internal_calls(self):
+        variables = set(self.state_variables_written)
+        for m in self.modifiers:
+            variables = variables.union(m.state_variables_written)
+
+        recursive_usage = self.state_variables_written_including_internal_calls_helper(self.internal_calls, 2, 0, set())
+
+        return variables.union(recursive_usage)
+
+    def state_variables_read_including_internal_calls_helper(self, functions, max_depth, i, recursive_usage):
+        if i >= max_depth:
+            return recursive_usage
+
+        for func in functions:
+            func_type = str(type(func))
+            if 'FunctionSolc' not in func_type:
+                continue
+
+            recursive_usage = recursive_usage.union(set(func.state_variables_read))
+            self.state_variables_read_including_internal_calls_helper(func.internal_calls, max_depth, i + 1, recursive_usage)
+
+        return recursive_usage
+
+    @property
+    def state_variables_read_including_internal_calls(self):
+        variables = set(self.state_variables_read)
+        for m in self.modifiers:
+            variables = variables.union(m.state_variables_read)
+
+        recursive_usage = self.state_variables_read_including_internal_calls_helper(set(self.internal_calls), 2, 0, set())
+
+        return variables.union(recursive_usage)
+
+
     @property
     def variables_read_or_written(self):
         """
